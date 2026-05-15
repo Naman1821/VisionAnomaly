@@ -52,20 +52,21 @@ def _load_detector(checkpoint: Path, config_path: Path):
 
 def predict(image: np.ndarray):
   if _detector is None:
-    return "Model not loaded. Set CHECKPOINT env or use CLI.", None, None
+    return "Model not loaded. Set CHECKPOINT env or use CLI.", None
   if image is None:
-    return "Upload an image.", None, None
+    return "Upload an image.", None
   pil = Image.fromarray(image).convert("RGB")
   tensor = _transform(pil)
   score, smap = _detector.predict(tensor)
   label = "DEFECT" if score > _threshold else "OK"
   overlay = overlay_heatmap(np.array(pil.resize((256, 256))), smap)
+  overlay = np.asarray(overlay, dtype=np.uint8)
   summary = (
       f"**Score:** {score:.4f}\n\n"
       f"**Prediction:** {label}\n\n"
       f"*(Higher score = more anomalous. Train on your category for best results.)*"
   )
-  return summary, overlay, smap
+  return summary, overlay
 
 
 def build_ui(checkpoint: Path, config_path: Path) -> gr.Blocks:
@@ -82,8 +83,7 @@ def build_ui(checkpoint: Path, config_path: Path) -> gr.Blocks:
       inp = gr.Image(type="numpy", label="Input image")
       out_overlay = gr.Image(label="Heatmap overlay")
     out_text = gr.Markdown()
-    out_raw = gr.Image(label="Raw score map", visible=False)
-    inp.change(predict, inputs=inp, outputs=[out_text, out_overlay, out_raw])
+    inp.change(predict, inputs=inp, outputs=[out_text, out_overlay])
   return demo
 
 

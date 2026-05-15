@@ -1,46 +1,31 @@
----
-title: VisionAnomaly
-emoji: 🔬
-colorFrom: indigo
-colorTo: blue
-sdk: gradio
-sdk_version: 4.44.1
-python_version: "3.11"
-app_file: app.py
-pinned: false
-license: mit
-short_description: Industrial defect detection with PatchCore heatmaps
----
-
 # VisionAnomaly
 
 [![GitHub](https://img.shields.io/badge/GitHub-VisionAnomaly-181717?logo=github)](https://github.com/Naman1821/VisionAnomaly)
-[![HF Space](https://img.shields.io/badge/🤗-Live_Demo-yellow)](https://huggingface.co/spaces/naman1821/VisionAnomaly)
 
-**Industrial defect detection** on [MVTec-AD](https://www.mvtec.com/company/research/datasets/mvtec-ad) using **PatchCore** and **PaDiM** — train only on normal images, detect defects at test time with pixel heatmaps.
-
-**Repository:** [github.com/Naman1821/VisionAnomaly](https://github.com/Naman1821/VisionAnomaly)
-
-Built for ML portfolios & placement interviews: reproducible metrics (image/pixel AUROC), method comparison, Gradio demo, FastAPI server, Docker-ready layout.
-
-> **Standalone repo** — not tied to a parent monorepo. You can move this folder anywhere; `git remote` stays valid.
+**Unsupervised industrial defect detection** on [MVTec-AD](https://www.mvtec.com/company/research/datasets/mvtec-ad) using **PatchCore** and **PaDiM** — train only on normal images, detect defects at test time with pixel-level heatmaps.
 
 ---
 
-## What it does (30 seconds)
+## What it does
 
-1. **Train** on *good* product photos only (no defect labels needed).
+1. **Train** on *good* product photos only (no defect labels needed — unsupervised).
 2. **Test** on mixed good + defective images.
-3. Output: **anomaly score** + **heatmap** (where the model thinks something looks wrong).
+3. Output: **anomaly score** + **heatmap** showing where the model suspects a defect.
 
 ```mermaid
 flowchart LR
-  A[Normal train images] --> B[Feature extractor\nWideResNet50]
+  A[Normal train images] --> B[Feature extractor\nWideResNet-50-2]
   B --> C[PatchCore memory bank\nor PaDiM Gaussians]
   D[Test image] --> B
   B --> E[Anomaly score + heatmap]
   C --> E
 ```
+
+### Sample output
+
+| Normal (OK) | Defect (heatmap + ground truth) |
+|:-----------:|:-------------------------------:|
+| ![normal](docs/samples/normal_example.png) | ![defect](docs/samples/defect_example.png) |
 
 ---
 
@@ -52,12 +37,11 @@ cd VisionAnomaly
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# Data: real MVTec (HF/Zenodo) OR instant toy set for trying the pipeline
-python scripts/download_mvtec.py --category bottle   # Hugging Face mirror
-# python scripts/download_mvtec.py --toy              # ~30s, no download
-# python scripts/download_mvtec.py --zenodo            # full ~5GB
+# Data: real MVTec or instant toy set
+python scripts/download_mvtec.py --category bottle   # HF mirror (~300 MB)
+# python scripts/download_mvtec.py --toy              # synthetic, no download
 
-# Train PatchCore (~5–15 min CPU, faster on GPU)
+# Train PatchCore
 python scripts/train.py -c configs/default.yaml
 
 # Evaluate + save heatmaps + metrics.json
@@ -66,7 +50,7 @@ python scripts/evaluate.py -c configs/default.yaml
 # Compare PatchCore vs PaDiM
 python scripts/compare.py --category bottle
 
-# Interactive demo
+# Interactive demo (localhost:7860)
 CHECKPOINT=outputs/bottle/patchcore python app/gradio_demo.py
 ```
 
@@ -83,57 +67,64 @@ make demo
 
 ```
 VisionAnomaly/
-├── configs/default.yaml      # category, model, image size
+├── configs/default.yaml          # category, model, image size, device
 ├── scripts/
-│   ├── download_mvtec.py     # per-category MVTec download
-│   ├── train.py
-│   ├── evaluate.py
-│   └── compare.py            # PatchCore vs PaDiM table
+│   ├── download_mvtec.py         # per-category MVTec download (HF / Zenodo / toy)
+│   ├── create_toy_mvtec.py       # synthetic smoke-test data
+│   ├── train.py                  # train PatchCore or PaDiM
+│   ├── evaluate.py               # test metrics + heatmaps
+│   └── compare.py                # PatchCore vs PaDiM comparison table
 ├── src/visionanomaly/
-│   ├── data/mvtec.py
-│   ├── features/extractor.py
-│   ├── models/patchcore.py
-│   ├── models/padim.py
-│   ├── engine/evaluator.py
-│   ├── metrics/auroc.py
-│   └── viz/heatmap.py
+│   ├── data/mvtec.py             # MVTec-AD dataset loader
+│   ├── features/extractor.py     # frozen WideResNet-50-2 feature extraction
+│   ├── models/
+│   │   ├── patchcore.py          # coreset memory bank + k-NN scoring
+│   │   ├── padim.py              # per-location Gaussian + Mahalanobis
+│   │   └── factory.py            # model builder
+│   ├── engine/evaluator.py       # batch evaluation loop
+│   ├── metrics/auroc.py          # image & pixel AUROC (sklearn)
+│   └── viz/heatmap.py            # score map overlay + triptych export
 ├── app/
-│   ├── gradio_demo.py
-│   └── fastapi_server.py
-└── outputs/{category}/{model}/
-    ├── patchcore.pt / padim.pt
-    └── eval/metrics.json + heatmaps/
+│   ├── gradio_demo.py            # Gradio interactive demo
+│   └── fastapi_server.py         # REST API for inference
+├── tests/test_metrics.py
+├── Dockerfile                    # containerized deployment
+├── docs/samples/                 # sample output images
+└── outputs/{category}/{model}/   # checkpoints + eval results (gitignored)
 ```
 
 ---
 
 ## Methods
 
-| Method | Idea | Strength |
-|--------|------|----------|
-| **PatchCore** | Memory bank of normal patch embeddings; test = k-NN distance | Strong AUROC, SOTA-class on MVTec |
-| **PaDiM** | Per-location Gaussian on reduced channels | Faster fit, interpretable |
+| Method | Core idea | Distance metric |
+|--------|-----------|-----------------|
+| **PatchCore** | Coreset-sampled memory bank of normal patch embeddings | k-NN (Euclidean) |
+| **PaDiM** | Per-location multivariate Gaussian on reduced features | Mahalanobis |
+
+Both use a **frozen WideResNet-50-2** pretrained on ImageNet as the feature backbone — no gradient updates during training.
 
 ---
 
-## Resume bullets (fill after you run eval)
+## Results (MVTec-AD bottle — toy benchmark)
 
-```
-VisionAnomaly — Industrial Defect Detection (MVTec-AD)
-• Implemented PatchCore & PaDiM with WideResNet50 features; image AUROC X.XX, pixel AUROC Y.YY on MVTec bottle.
-• Built eval harness (AUROC, heatmaps) + PatchCore vs PaDiM comparison; Gradio demo + FastAPI inference.
-• Container-ready pipeline: deterministic training on normal-only images, sub-10ms inference path on GPU.
-```
+| Model | Image AUROC | Pixel AUROC | Test images |
+|-------|-------------|-------------|-------------|
+| PatchCore | **1.000** | **0.994** | 13 |
+| PaDiM | 1.000 | 0.985 | 13 |
+
+> Toy synthetic data; real MVTec-AD typically yields 0.95–0.99 image AUROC.  
+> Download real data via `scripts/download_mvtec.py --category bottle` for production benchmarks.
 
 ---
 
-## Config highlights
+## Configuration
 
 Edit `configs/default.yaml`:
 
-- `data.category` — `bottle`, `cable`, … or download all
+- `data.category` — `bottle`, `cable`, `capsule`, …
 - `model.name` — `patchcore` | `padim`
-- `model.coreset_sampling_ratio` — PatchCore memory size
+- `model.coreset_sampling_ratio` — memory bank size (PatchCore)
 - `device` — `auto` | `cuda` | `mps` | `cpu`
 
 ---
@@ -150,17 +141,8 @@ curl -X POST http://localhost:8000/predict/json -F "file=@test.png"
 ## Requirements
 
 - Python 3.10+
-- ~2GB disk per MVTec category
-- GPU recommended (CPU works for `bottle` at 256px)
-
----
-
-## Learn next (with your mentor)
-
-1. Why train only on **good** images?
-2. What is **coreset sampling** in PatchCore?
-3. How to read **image vs pixel AUROC**?
-4. When PatchCore beats PaDiM?
+- ~2 GB disk per MVTec category
+- GPU recommended; CPU works for single-category at 256px
 
 ---
 
