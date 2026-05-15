@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "visionanomaly"
 version = "0.1.0"
-description = "Industrial defect detection with PatchCore and PaDiM on MVTec-AD"
+description = "VisionAnomaly — industrial defect detection with PatchCore and PaDiM on MVTec-AD"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = []

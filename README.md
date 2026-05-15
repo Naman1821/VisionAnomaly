@@ -1,6 +1,10 @@
 # VisionAnomaly
 
-**Industrial defect detection** on [MVTec-AD](https://www.mvtec.com/company/research/datasets/mvtec-ad) using **PatchCore** and **PaDiM — train only on normal images, detect defects at test time with pixel heatmaps.**
+[![GitHub](https://img.shields.io/badge/GitHub-VisionAnomaly-181717?logo=github)](https://github.com/Naman1821/VisionAnomaly)
+
+**Industrial defect detection** on [MVTec-AD](https://www.mvtec.com/company/research/datasets/mvtec-ad) using **PatchCore** and **PaDiM** — train only on normal images, detect defects at test time with pixel heatmaps.
+
+**Repository:** [github.com/Naman1821/VisionAnomaly](https://github.com/Naman1821/VisionAnomaly)
 
 Built for ML portfolios & placement interviews: reproducible metrics (image/pixel AUROC), method comparison, Gradio demo, FastAPI server, Docker-ready layout.
 
@@ -28,7 +32,8 @@ flowchart LR
 ## Quick start
 
 ```bash
-cd vision-anomaly
+git clone https://github.com/Naman1821/VisionAnomaly.git
+cd VisionAnomaly
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
@@ -62,7 +67,7 @@ make demo
 ## Project structure
 
 ```
-vision-anomaly/
+VisionAnomaly/
 ├── configs/default.yaml      # category, model, image size
 ├── scripts/
 │   ├── download_mvtec.py     # per-category MVTec download
