@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Caches
+.cache/
+
+# Dataset & run artifacts (repo root only — not src/visionanomaly/data/)
+/data/
+/outputs/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Gradio
+.gradio/
