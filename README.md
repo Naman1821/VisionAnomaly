@@ -1,6 +1,20 @@
+---
+title: VisionAnomaly
+emoji: 🔬
+colorFrom: indigo
+colorTo: blue
+sdk: gradio
+sdk_version: 4.44.1
+app_file: app.py
+pinned: false
+license: mit
+short_description: Industrial defect detection — upload image, get PatchCore heatmap
+---
+
 # VisionAnomaly
 
 [![GitHub](https://img.shields.io/badge/GitHub-VisionAnomaly-181717?logo=github)](https://github.com/Naman1821/VisionAnomaly)
+[![HF Space](https://img.shields.io/badge/🤗-Live_Demo-yellow)](https://huggingface.co/spaces/naman1821/VisionAnomaly)
 
 **Industrial defect detection** on [MVTec-AD](https://www.mvtec.com/company/research/datasets/mvtec-ad) using **PatchCore** and **PaDiM** — train only on normal images, detect defects at test time with pixel heatmaps.
 
