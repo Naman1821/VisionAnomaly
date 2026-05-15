@@ -10,4 +10,5 @@ matplotlib>=3.7.0
 pandas>=2.0.0
 tqdm>=4.66.0
 PyYAML>=6.0
-gradio>=4.44.0
+gradio>=4.44.0,<5
+pyaudioop>=0.3.0; python_version >= "3.13"
