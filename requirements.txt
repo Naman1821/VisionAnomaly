@@ -1,13 +1,13 @@
-# VisionAnomaly — Streamlit Cloud / demo (Python 3.11)
-# For Gradio + HF Space: pip install -r requirements-full.txt
-streamlit>=1.28.0
-torch>=2.1.0,<2.5.0
-torchvision>=0.16.0,<0.20.0
+# Streamlit Cloud — Python 3.11, CPU-only PyTorch (fits free tier RAM)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.2+cpu
+torchvision==0.17.2+cpu
+streamlit>=1.28.0,<2
 numpy>=1.24.0,<2.0.0
-scikit-learn>=1.3.0
-scipy>=1.11.0
-opencv-python-headless>=4.8.0
-Pillow>=10.0.0
-matplotlib>=3.7.0
+scikit-learn>=1.3.0,<1.6.0
+scipy>=1.11.0,<1.14.0
+opencv-python-headless>=4.8.0,<5
+Pillow>=10.0.0,<12
+matplotlib>=3.7.0,<4
 PyYAML>=6.0
 tqdm>=4.66.0

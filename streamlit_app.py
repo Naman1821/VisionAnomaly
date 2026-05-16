@@ -25,6 +25,13 @@ from torchvision import transforms as T
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "src"))
 os.environ.setdefault("TORCH_HOME", str(ROOT / ".cache" / "torch"))
+if Path("/mount/src").is_dir():
+  os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+
+def _on_streamlit_cloud() -> bool:
+  """Streamlit Community Cloud mounts repo at /mount/src."""
+  return Path("/mount/src").is_dir()
 
 from visionanomaly.config import resolve_device  # noqa: E402
 from visionanomaly.models.patchcore import PatchCore  # noqa: E402
@@ -72,7 +79,8 @@ def _load_model(_weights_version: float) -> tuple[PatchCore, float]:
   if not WEIGHTS.is_file():
     raise FileNotFoundError(f"Missing {WEIGHTS}. Run: python train.py")
   cfg = _load_cfg()
-  device = resolve_device(cfg.get("device", "auto"))
+  # Cloud free tier: CPU only (no CUDA/MPS)
+  device = "cpu" if _on_streamlit_cloud() else resolve_device(cfg.get("device", "auto"))
   detector = PatchCore(
       backbone=cfg["model"]["backbone"],
       layers=cfg["model"]["layers"],
@@ -80,7 +88,7 @@ def _load_model(_weights_version: float) -> tuple[PatchCore, float]:
       num_neighbors=cfg["model"]["num_neighbors"],
       device=device,
   )
-  state = torch.load(WEIGHTS, map_location=device, weights_only=False)
+  state = torch.load(WEIGHTS, map_location="cpu", weights_only=False)
   detector.memory_bank = state["memory_bank"].to(device)
   detector.coreset_ratio = state["coreset_ratio"]
   detector.num_neighbors = state["num_neighbors"]

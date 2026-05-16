@@ -60,7 +60,9 @@ streamlit run streamlit_app.py
 
 Open **http://localhost:8501** — pick a sample, click **Run**, see the heatmap.
 
-**Live demo:** [visionanomaly.streamlit.app](https://visionanomaly.streamlit.app) (requires Python 3.11 on Streamlit Cloud)
+**Live demo:** [visionanomaly.streamlit.app](https://visionanomaly.streamlit.app)
+
+> Streamlit Cloud: set **Python 3.11**, main file `streamlit_app.py`. If the link fails, open [Manage app](https://share.streamlit.io) → check status is **Running** (not Failed), then **Reboot**.
 
 > To retrain from scratch, place [MVTec bottle archive](https://www.mvtec.com/company/research/datasets/mvtec-ad/downloads) at `data/bottle.tar.xz` and run `python train.py`.
 
