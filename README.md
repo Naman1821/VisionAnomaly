@@ -2,15 +2,15 @@
 
 [![GitHub](https://img.shields.io/badge/GitHub-VisionAnomaly-181717?logo=github)](https://github.com/Naman1821/VisionAnomaly)
 
-**Unsupervised industrial defect detection** on [MVTec-AD](https://www.mvtec.com/company/research/datasets/mvtec-ad) using **PatchCore** and **PaDiM** — train only on normal images, detect defects at test time with pixel-level heatmaps.
+**Unsupervised industrial defect detection** on [MVTec-AD](https://www.mvtec.com/company/research/datasets/mvtec-ad) using **PatchCore** and **PaDiM** — trained only on normal images, detects defects at test time with pixel-level heatmaps.
 
 ---
 
 ## What it does
 
-1. **Train** on *good* product photos only (no defect labels needed — unsupervised).
+1. **Train** on defect-free product images only (no labels needed — fully unsupervised).
 2. **Test** on mixed good + defective images.
-3. Output: **anomaly score** + **heatmap** showing where the model suspects a defect.
+3. Output: **anomaly score** + **pixel-level heatmap** showing suspected defect regions.
 
 ```mermaid
 flowchart LR
@@ -21,11 +21,22 @@ flowchart LR
   C --> E
 ```
 
-### Sample output
+### Sample output (real MVTec-AD bottle)
 
 | Normal (OK) | Defect (heatmap + ground truth) |
 |:-----------:|:-------------------------------:|
 | ![normal](docs/samples/normal_example.png) | ![defect](docs/samples/defect_example.png) |
+
+---
+
+## Results (MVTec-AD bottle — real dataset)
+
+| Model | Image AUROC | Pixel AUROC | Test images |
+|-------|-------------|-------------|-------------|
+| **PatchCore** | **0.998** | **0.976** | 83 |
+| PaDiM | 0.992 | 0.961 | 83 |
+
+> Trained on 209 defect-free bottle images. Evaluated on 83 test images (20 good + 63 defective across broken_large, broken_small, contamination).
 
 ---
 
@@ -36,30 +47,40 @@ git clone https://github.com/Naman1821/VisionAnomaly.git
 cd VisionAnomaly
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+```
 
-# Data: real MVTec or instant toy set
-python scripts/download_mvtec.py --category bottle   # HF mirror (~300 MB)
-# python scripts/download_mvtec.py --toy              # synthetic, no download
+### Option A — Streamlit demo (recommended)
+
+Pre-trained weights and 12 real sample images are bundled. Just run:
+
+```bash
+streamlit run streamlit_app.py
+```
+
+Open **http://localhost:8501** — pick a sample, click **Run**, see the heatmap.
+
+> To retrain from scratch, place [MVTec bottle archive](https://www.mvtec.com/company/research/datasets/mvtec-ad/downloads) at `data/bottle.tar.xz` and run `python train.py`.
+
+### Option B — Full pipeline
+
+```bash
+# Data
+python scripts/download_mvtec.py --category bottle
 
 # Train PatchCore
 python scripts/train.py -c configs/default.yaml
 
-# Evaluate + save heatmaps + metrics.json
+# Evaluate + heatmaps + metrics.json
 python scripts/evaluate.py -c configs/default.yaml
 
 # Compare PatchCore vs PaDiM
 python scripts/compare.py --category bottle
 
-# Interactive demo (localhost:7860)
+# Gradio demo (localhost:7860)
 CHECKPOINT=outputs/bottle/patchcore python app/gradio_demo.py
 ```
 
-Or use Make:
-
-```bash
-make install download train eval
-make demo
-```
+Or use Make: `make install download train eval demo`
 
 ---
 
@@ -67,30 +88,39 @@ make demo
 
 ```
 VisionAnomaly/
-├── configs/default.yaml          # category, model, image size, device
+├── train.py                       # one-step: extract data → train → demo samples
+├── streamlit_app.py               # Streamlit UI — click sample, see heatmap
+├── configs/default.yaml           # category, model, image size, device
 ├── scripts/
-│   ├── download_mvtec.py         # per-category MVTec download (HF / Zenodo / toy)
-│   ├── create_toy_mvtec.py       # synthetic smoke-test data
-│   ├── train.py                  # train PatchCore or PaDiM
-│   ├── evaluate.py               # test metrics + heatmaps
-│   └── compare.py                # PatchCore vs PaDiM comparison table
+│   ├── download_mvtec.py          # per-category MVTec download (HF / toy)
+│   ├── create_toy_mvtec.py        # synthetic smoke-test data
+│   ├── train.py                   # train PatchCore or PaDiM
+│   ├── evaluate.py                # test metrics + heatmaps
+│   └── compare.py                 # PatchCore vs PaDiM comparison
 ├── src/visionanomaly/
-│   ├── data/mvtec.py             # MVTec-AD dataset loader
-│   ├── features/extractor.py     # frozen WideResNet-50-2 feature extraction
+│   ├── data/mvtec.py              # MVTec-AD dataset loader
+│   ├── features/extractor.py      # frozen WideResNet-50-2 multi-scale features
 │   ├── models/
-│   │   ├── patchcore.py          # coreset memory bank + k-NN scoring
-│   │   ├── padim.py              # per-location Gaussian + Mahalanobis
-│   │   └── factory.py            # model builder
-│   ├── engine/evaluator.py       # batch evaluation loop
-│   ├── metrics/auroc.py          # image & pixel AUROC (sklearn)
-│   └── viz/heatmap.py            # score map overlay + triptych export
+│   │   ├── patchcore.py           # coreset memory bank + k-NN scoring
+│   │   ├── padim.py               # per-location Gaussian + Mahalanobis
+│   │   └── factory.py             # model builder
+│   ├── engine/evaluator.py        # batch evaluation loop
+│   ├── metrics/auroc.py           # image & pixel AUROC
+│   └── viz/heatmap.py             # score map overlay + triptych export
 ├── app/
-│   ├── gradio_demo.py            # Gradio interactive demo
-│   └── fastapi_server.py         # REST API for inference
+│   ├── gradio_demo.py             # Gradio interactive demo
+│   └── fastapi_server.py          # REST API for inference
+├── model/                         # trained weights (auto-generated)
+│   ├── patchcore_weights.bin      # PatchCore memory bank + threshold
+│   └── score_threshold.txt        # calibrated normal/defect threshold
+├── sample_images/                 # bundled demo images (real MVTec bottle)
+│   ├── good/                      # 6 normal test bottles
+│   └── defective/                 # 6 defects (broken_large, broken_small, contamination)
+├── docs/samples/                  # README sample output images
 ├── tests/test_metrics.py
-├── Dockerfile                    # containerized deployment
-├── docs/samples/                 # sample output images
-└── outputs/{category}/{model}/   # checkpoints + eval results (gitignored)
+├── Dockerfile
+├── requirements.txt
+└── outputs/                       # eval results + heatmaps (gitignored)
 ```
 
 ---
@@ -102,19 +132,7 @@ VisionAnomaly/
 | **PatchCore** | Coreset-sampled memory bank of normal patch embeddings | k-NN (Euclidean) |
 | **PaDiM** | Per-location multivariate Gaussian on reduced features | Mahalanobis |
 
-Both use a **frozen WideResNet-50-2** pretrained on ImageNet as the feature backbone — no gradient updates during training.
-
----
-
-## Results (MVTec-AD bottle — toy benchmark)
-
-| Model | Image AUROC | Pixel AUROC | Test images |
-|-------|-------------|-------------|-------------|
-| PatchCore | **1.000** | **0.994** | 13 |
-| PaDiM | 1.000 | 0.985 | 13 |
-
-> Toy synthetic data; real MVTec-AD typically yields 0.95–0.99 image AUROC.  
-> Download real data via `scripts/download_mvtec.py --category bottle` for production benchmarks.
+Both use a **frozen WideResNet-50-2** pretrained on ImageNet — zero gradient updates during training (10x faster than supervised alternatives).
 
 ---
 
@@ -141,8 +159,8 @@ curl -X POST http://localhost:8000/predict/json -F "file=@test.png"
 ## Requirements
 
 - Python 3.10+
-- ~2 GB disk per MVTec category
-- GPU recommended; CPU works for single-category at 256px
+- ~200 MB disk for bottle category
+- GPU/MPS recommended; CPU works at 256px
 
 ---
 
