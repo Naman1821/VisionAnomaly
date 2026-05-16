@@ -132,7 +132,7 @@ def _load_model(category: str, _weights_version: float) -> tuple[PatchCore, floa
   if threshold <= 0 and _threshold_path(category).is_file():
     threshold = float(_threshold_path(category).read_text().strip())
   if threshold <= 0:
-    threshold = 4.09 if category == "bottle" else 5.5
+    threshold = 4.09 if category == "bottle" else 3.55
   return detector, threshold
 
 

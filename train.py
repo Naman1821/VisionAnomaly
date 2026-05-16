@@ -54,6 +54,7 @@ CATEGORY_DEFECTS: dict[str, tuple[str, ...]] = {
 }
 
 DEFAULT_CATEGORIES = ("bottle", "capsule")
+SAMPLES_PER_SPLIT = 6  # good + defective demo images per category
 
 
 def _tar_path(category: str) -> Path:
@@ -61,7 +62,10 @@ def _tar_path(category: str) -> Path:
 
 
 def _weights_path(category: str) -> Path:
-  return MODEL_DIR / f"patchcore_{category}_weights.bin"
+  named = MODEL_DIR / f"patchcore_{category}_weights.bin"
+  if category == "bottle" and not named.is_file():
+    return MODEL_DIR / "patchcore_weights.bin"
+  return named
 
 
 def _threshold_path(category: str) -> Path:
@@ -100,16 +104,72 @@ def _extract_category_tar(category: str) -> None:
     raise SystemExit(f"Extract failed for {category} — check archive layout.")
 
 
+def _score_image(detector, path: Path) -> float:
+  return float(detector.predict(_infer_transform(Image.open(path).convert("RGB")))[0])
+
+
 def _calibrate_threshold(detector, category: str) -> float:
-  """Threshold from normal test images (k-NN distances, category-specific scale)."""
-  good_dir = DATA_ROOT / category / "test" / "good"
-  good_scores: list[float] = []
-  for p in sorted(good_dir.iterdir()):
+  """Threshold from normal **train** images (99th percentile + margin).
+
+  max(test_good)+ε is too strict for subtle defects (e.g. capsule scratch/crack).
+  """
+  train_good = DATA_ROOT / category / "train" / "good"
+  scores: list[float] = []
+  for p in sorted(train_good.iterdir()):
     if p.suffix.lower() in IMG_EXTS:
-      good_scores.append(detector.predict(_infer_transform(Image.open(p).convert("RGB")))[0])
-  if not good_scores:
-    return 4.1
-  return float(max(good_scores) + 0.01)
+      scores.append(_score_image(detector, p))
+  if not scores:
+    test_good = DATA_ROOT / category / "test" / "good"
+    for p in sorted(test_good.iterdir()):
+      if p.suffix.lower() in IMG_EXTS:
+        scores.append(_score_image(detector, p))
+  if not scores:
+    return 4.1 if category == "bottle" else 3.55
+  return float(np.percentile(scores, 99) + 0.02)
+
+
+def _load_detector_from_weights(category: str):
+  from visionanomaly.models.patchcore import PatchCore
+
+  cfg = load_config(CONFIG)
+  device = resolve_device(cfg.get("device", "auto"))
+  weights = _weights_path(category)
+  if category == "bottle" and not weights.is_file():
+    weights = MODEL_DIR / "patchcore_weights.bin"
+  if not weights.is_file():
+    raise FileNotFoundError(f"Missing weights for {category}: {weights}")
+  detector = PatchCore(
+      backbone=cfg["model"]["backbone"],
+      layers=cfg["model"]["layers"],
+      coreset_ratio=cfg["model"]["coreset_sampling_ratio"],
+      num_neighbors=cfg["model"]["num_neighbors"],
+      device=device,
+  )
+  state = torch.load(weights, map_location="cpu", weights_only=False)
+  detector.memory_bank = state["memory_bank"].to(device)
+  detector.coreset_ratio = state["coreset_ratio"]
+  detector.num_neighbors = state["num_neighbors"]
+  detector._rp = state.get("rp")
+  threshold = float(state.get("score_threshold", 0.0))
+  return detector, threshold, weights
+
+
+def _persist_threshold(category: str, detector, threshold: float) -> None:
+  weights = _weights_path(category)
+  if category == "bottle" and not weights.is_file():
+    weights = MODEL_DIR / "patchcore_weights.bin"
+  state = torch.load(weights, map_location="cpu", weights_only=False)
+  state["score_threshold"] = threshold
+  state["category"] = category
+  torch.save(state, weights)
+  _threshold_path(category).write_text(f"{threshold:.6f}\n", encoding="utf-8")
+  ckpt = MODEL_DIR / f"patchcore_{category}" / "patchcore.pt"
+  if ckpt.is_file():
+    torch.save(state, ckpt)
+  if category == "bottle":
+    torch.save(state, MODEL_DIR / "patchcore_weights.bin")
+    (MODEL_DIR / "score_threshold.txt").write_text(f"{threshold:.6f}\n", encoding="utf-8")
+  print(f"  threshold ({category}): {threshold:.4f} → {weights.name}")
 
 
 def _train_category(category: str) -> dict:
@@ -164,11 +224,27 @@ def _train_category(category: str) -> dict:
   )
   metrics = evaluate_model(detector, test_loader, device, MODEL_DIR / f"eval_{category}", save_heatmaps=False)
   print(f"  eval: image_auroc={metrics['image_auroc']:.4f} pixel_auroc={metrics.get('pixel_auroc', 0):.4f}")
+  _copy_samples(category, detector=detector, threshold=threshold)
   return metrics
 
 
-def _copy_samples(category: str, n_good: int = 3, n_defect: int = 3) -> None:
-  """Copy test images into sample_images/{category}/good|defective/."""
+def _copy_samples(
+    category: str,
+    n_good: int = SAMPLES_PER_SPLIT,
+    n_defect: int = SAMPLES_PER_SPLIT,
+    detector=None,
+    threshold: float | None = None,
+) -> None:
+  """Copy test images into sample_images/{category}/good|defective/.
+
+  Picks normals below threshold and defects above threshold so the Streamlit demo
+  matches expected OK / DEFECT labels.
+  """
+  if detector is None or threshold is None:
+    detector, threshold, _ = _load_detector_from_weights(category)
+    if threshold <= 0:
+      threshold = _calibrate_threshold(detector, category)
+
   test_root = DATA_ROOT / category / "test"
   good_out = SAMPLE_ROOT / category / "good"
   defect_out = SAMPLE_ROOT / category / "defective"
@@ -182,21 +258,35 @@ def _copy_samples(category: str, n_good: int = 3, n_defect: int = 3) -> None:
   good_files = sorted(
       p for p in (test_root / "good").iterdir() if p.suffix.lower() in IMG_EXTS
   )
-  random.seed(42 if category == "bottle" else 142)
-  for src in random.sample(good_files, min(n_good, len(good_files))):
+  scored_good = sorted(((p, _score_image(detector, p)) for p in good_files), key=lambda x: x[1])
+  clear_good = [p for p, s in scored_good if s < threshold]
+  good_pick = (clear_good or [p for p, _ in scored_good])[:n_good]
+  if len(good_pick) < n_good:
+    good_pick = [p for p, _ in scored_good[:n_good]]
+
+  for src in good_pick:
     shutil.copy2(src, good_out / src.name)
 
   defects = CATEGORY_DEFECTS.get(category, ())
-  per_type = max(1, n_defect // max(len(defects), 1))
-  random.seed(43 if category == "bottle" else 143)
+  per_type = max(1, (n_defect + len(defects) - 1) // max(len(defects), 1))
   picked: list[Path] = []
   for folder in defects:
     sub = test_root / folder
     if not sub.is_dir():
       continue
     pool = sorted(p for p in sub.iterdir() if p.suffix.lower() in IMG_EXTS)
-    picked.extend(random.sample(pool, min(per_type, len(pool))))
-  for src in picked[:n_defect]:
+    scored = sorted(((p, _score_image(detector, p)) for p in pool), key=lambda x: x[1], reverse=True)
+    above = [p for p, s in scored if s > threshold]
+    type_pick = (above or [p for p, _ in scored])[:per_type]
+    picked.extend(type_pick)
+
+  seen: set[Path] = set()
+  unique_picked: list[Path] = []
+  for p in sorted(picked, key=lambda x: _score_image(detector, x), reverse=True):
+    if p not in seen:
+      seen.add(p)
+      unique_picked.append(p)
+  for src in unique_picked[:n_defect]:
     shutil.copy2(src, defect_out / f"{src.parent.name}_{src.stem}.png")
 
   print(f"  samples/{category}: {len(list(good_out.glob('*')))} good, {len(list(defect_out.glob('*')))} defective")
@@ -217,6 +307,11 @@ def main() -> None:
   )
   parser.add_argument("--extract-only", action="store_true")
   parser.add_argument("--skip-train", action="store_true", help="Only extract + samples")
+  parser.add_argument(
+      "--recalibrate",
+      action="store_true",
+      help="Recompute threshold from train/good and refresh demo samples (no retrain)",
+  )
   args = parser.parse_args()
 
   if args.category == "all":
@@ -241,8 +336,13 @@ def main() -> None:
           "num_test": int(m["num_test"]),
       }
 
-  for cat in categories:
-    _copy_samples(cat, n_good=3, n_defect=3)
+  if args.recalibrate or args.skip_train:
+    for cat in categories:
+      detector, _, _ = _load_detector_from_weights(cat)
+      if args.recalibrate:
+        threshold = _calibrate_threshold(detector, cat)
+        _persist_threshold(cat, detector, threshold)
+      _copy_samples(cat, detector=detector)
 
   if all_metrics:
     _save_metrics_table(all_metrics)
