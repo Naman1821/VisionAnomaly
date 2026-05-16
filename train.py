@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-VisionAnomaly — MVTec-AD bottle: extract → train PatchCore → demo samples.
+VisionAnomaly — MVTec-AD: extract → train PatchCore → demo samples.
 
-Place official category archive at: data/bottle.tar.xz
+Place category archives at: data/bottle.tar.xz, data/capsule.tar.xz, …
 Uses visionanomaly (src/) — does not modify existing package code.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import random
 import shutil
@@ -28,6 +29,7 @@ from torchvision import transforms as T
 
 from visionanomaly.config import load_config, resolve_device  # noqa: E402
 from visionanomaly.data.mvtec import build_dataloader  # noqa: E402
+from visionanomaly.engine.evaluator import evaluate_model  # noqa: E402
 from visionanomaly.models.factory import build_model  # noqa: E402
 from visionanomaly.utils.seed import set_seed  # noqa: E402
 
@@ -40,86 +42,89 @@ _infer_transform = T.Compose(
 )
 
 MODEL_DIR = ROOT / "model"
-WEIGHTS_FILE = MODEL_DIR / "patchcore_weights.bin"
-SAMPLE_GOOD = ROOT / "sample_images" / "good"
-SAMPLE_DEFECT = ROOT / "sample_images" / "defective"
 DATA_ROOT = ROOT / "data" / "mvtec"
-BOTTLE_TAR = ROOT / "data" / "bottle.tar.xz"
-CATEGORY = "bottle"
+SAMPLE_ROOT = ROOT / "sample_images"
 CONFIG = ROOT / "configs" / "default.yaml"
-
-DEFECT_FOLDERS = ("broken_large", "broken_small", "contamination")
 IMG_EXTS = {".png", ".jpg", ".jpeg", ".bmp"}
 
+# Per-category MVTec test defect folder names
+CATEGORY_DEFECTS: dict[str, tuple[str, ...]] = {
+    "bottle": ("broken_large", "broken_small", "contamination"),
+    "capsule": ("crack", "faulty_imprint", "poke", "scratch", "squeeze"),
+}
 
-def _is_real_bottle() -> bool:
-  train_good = DATA_ROOT / CATEGORY / "train" / "good"
+DEFAULT_CATEGORIES = ("bottle", "capsule")
+
+
+def _tar_path(category: str) -> Path:
+  return ROOT / "data" / f"{category}.tar.xz"
+
+
+def _weights_path(category: str) -> Path:
+  return MODEL_DIR / f"patchcore_{category}_weights.bin"
+
+
+def _threshold_path(category: str) -> Path:
+  return MODEL_DIR / f"score_threshold_{category}.txt"
+
+
+def _is_real_category(category: str) -> bool:
+  train_good = DATA_ROOT / category / "train" / "good"
   if not train_good.is_dir():
     return False
   n_train = sum(1 for p in train_good.iterdir() if p.suffix.lower() in IMG_EXTS)
-  test_root = DATA_ROOT / CATEGORY / "test"
-  return n_train >= 50 and all((test_root / d).is_dir() for d in DEFECT_FOLDERS)
+  test_root = DATA_ROOT / category / "test"
+  defects = CATEGORY_DEFECTS.get(category, ())
+  return n_train >= 50 and all((test_root / d).is_dir() for d in defects)
 
 
-def _extract_bottle_tar() -> None:
-  """Extract data/bottle.tar.xz → data/mvtec/bottle/."""
-  if not BOTTLE_TAR.is_file():
-    raise SystemExit(
-        f"Missing {BOTTLE_TAR}\n"
-        "Download MVTec-AD bottle category and save as data/bottle.tar.xz"
-    )
+def _extract_category_tar(category: str) -> None:
+  tar_path = _tar_path(category)
+  if not tar_path.is_file():
+    raise SystemExit(f"Missing {tar_path}")
 
-  cat_dir = DATA_ROOT / CATEGORY
-  if _is_real_bottle():
-    print(f"[skip] Bottle data already at {cat_dir}")
+  cat_dir = DATA_ROOT / category
+  if _is_real_category(category):
+    print(f"[skip] {category} data already at {cat_dir}")
     return
 
   if cat_dir.is_dir():
     shutil.rmtree(cat_dir)
 
   DATA_ROOT.mkdir(parents=True, exist_ok=True)
-  print(f"Extracting {BOTTLE_TAR.name} → {DATA_ROOT}/...")
-  with tarfile.open(BOTTLE_TAR, "r:xz") as tar:
+  print(f"Extracting {tar_path.name} → {DATA_ROOT}/...")
+  with tarfile.open(tar_path, "r:xz") as tar:
     tar.extractall(path=DATA_ROOT)
 
-  if not _is_real_bottle():
-    raise SystemExit("Extract failed — expected data/mvtec/bottle/train/good/ (+ test defects)")
+  if not _is_real_category(category):
+    raise SystemExit(f"Extract failed for {category} — check archive layout.")
 
 
-def _calibrate_threshold(detector) -> float:
-  """Threshold for k-NN image scores (typically ~3.5–6 on MVTec bottle, not 0–1)."""
-  good_dir = DATA_ROOT / CATEGORY / "test" / "good"
+def _calibrate_threshold(detector, category: str) -> float:
+  """Threshold from normal test images (k-NN distances, category-specific scale)."""
+  good_dir = DATA_ROOT / category / "test" / "good"
   good_scores: list[float] = []
-  defect_scores: list[float] = []
   for p in sorted(good_dir.iterdir()):
     if p.suffix.lower() in IMG_EXTS:
       good_scores.append(detector.predict(_infer_transform(Image.open(p).convert("RGB")))[0])
-  test_root = DATA_ROOT / CATEGORY / "test"
-  for folder in DEFECT_FOLDERS:
-    sub = test_root / folder
-    if sub.is_dir():
-      for p in sorted(sub.iterdir()):
-        if p.suffix.lower() in IMG_EXTS:
-          defect_scores.append(detector.predict(_infer_transform(Image.open(p).convert("RGB")))[0])
   if not good_scores:
     return 4.1
-  # Just above the highest normal test score (k-NN distances ~4 on MVTec bottle)
   return float(max(good_scores) + 0.01)
 
 
-def _train_patchcore() -> None:
+def _train_category(category: str) -> dict:
   cfg = load_config(CONFIG)
   cfg["data"]["root"] = str(DATA_ROOT)
-  cfg["data"]["category"] = CATEGORY
+  cfg["data"]["category"] = category
   cfg["data"]["num_workers"] = 0
   cfg["model"]["name"] = "patchcore"
   set_seed(cfg.get("seed", 42))
   device = resolve_device(cfg.get("device", "auto"))
-  print(f"Training PatchCore on real {CATEGORY} ({device})...")
+  print(f"\nTraining PatchCore on {category} ({device})...")
 
   loader = build_dataloader(
       root=DATA_ROOT,
-      category=CATEGORY,
+      category=category,
       split="train",
       image_size=cfg["data"]["image_size"],
       batch_size=cfg["data"]["train_batch_size"],
@@ -127,62 +132,121 @@ def _train_patchcore() -> None:
   )
   detector = build_model(cfg, device)
   detector.fit(loader)
-  threshold = _calibrate_threshold(detector)
-  print(f"Score threshold (normal vs defect): {threshold:.4f}")
+  threshold = _calibrate_threshold(detector, category)
+  print(f"  threshold ({category}): {threshold:.4f}")
 
   MODEL_DIR.mkdir(parents=True, exist_ok=True)
-  ckpt_dir = MODEL_DIR / "patchcore"
+  ckpt_dir = MODEL_DIR / f"patchcore_{category}"
   detector.save(ckpt_dir)
 
   state = torch.load(ckpt_dir / "patchcore.pt", map_location="cpu", weights_only=False)
   state["score_threshold"] = threshold
+  state["category"] = category
   torch.save(state, ckpt_dir / "patchcore.pt")
-  torch.save(state, WEIGHTS_FILE)
-  (MODEL_DIR / "score_threshold.txt").write_text(f"{threshold:.6f}\n", encoding="utf-8")
-  print(f"Saved → {WEIGHTS_FILE} (threshold={threshold:.4f})")
+  weights = _weights_path(category)
+  torch.save(state, weights)
+  _threshold_path(category).write_text(f"{threshold:.6f}\n", encoding="utf-8")
+
+  # Legacy single-file name for bottle (Streamlit cloud / older links)
+  if category == "bottle":
+    torch.save(state, MODEL_DIR / "patchcore_weights.bin")
+    (MODEL_DIR / "score_threshold.txt").write_text(f"{threshold:.6f}\n", encoding="utf-8")
+
+  print(f"  saved → {weights}")
+
+  test_loader = build_dataloader(
+      root=DATA_ROOT,
+      category=category,
+      split="test",
+      image_size=cfg["data"]["image_size"],
+      batch_size=1,
+      num_workers=0,
+  )
+  metrics = evaluate_model(detector, test_loader, device, MODEL_DIR / f"eval_{category}", save_heatmaps=False)
+  print(f"  eval: image_auroc={metrics['image_auroc']:.4f} pixel_auroc={metrics.get('pixel_auroc', 0):.4f}")
+  return metrics
 
 
-def _copy_samples(n_good: int = 6, n_defect: int = 6) -> None:
-  """Copy test images for Streamlit demo (real bottle only)."""
-  test_root = DATA_ROOT / CATEGORY / "test"
-  SAMPLE_GOOD.mkdir(parents=True, exist_ok=True)
-  SAMPLE_DEFECT.mkdir(parents=True, exist_ok=True)
-  for d in (SAMPLE_GOOD, SAMPLE_DEFECT):
+def _copy_samples(category: str, n_good: int = 3, n_defect: int = 3) -> None:
+  """Copy test images into sample_images/{category}/good|defective/."""
+  test_root = DATA_ROOT / category / "test"
+  good_out = SAMPLE_ROOT / category / "good"
+  defect_out = SAMPLE_ROOT / category / "defective"
+  good_out.mkdir(parents=True, exist_ok=True)
+  defect_out.mkdir(parents=True, exist_ok=True)
+  for d in (good_out, defect_out):
     for old in d.glob("*"):
       if old.is_file():
         old.unlink()
 
-  good_dir = test_root / "good"
-  good_files = sorted(p for p in good_dir.iterdir() if p.suffix.lower() in IMG_EXTS)
-  random.seed(42)
+  good_files = sorted(
+      p for p in (test_root / "good").iterdir() if p.suffix.lower() in IMG_EXTS
+  )
+  random.seed(42 if category == "bottle" else 142)
   for src in random.sample(good_files, min(n_good, len(good_files))):
-    shutil.copy2(src, SAMPLE_GOOD / src.name)
+    shutil.copy2(src, good_out / src.name)
 
-  per_type = 2
-  random.seed(43)
+  defects = CATEGORY_DEFECTS.get(category, ())
+  per_type = max(1, n_defect // max(len(defects), 1))
+  random.seed(43 if category == "bottle" else 143)
   picked: list[Path] = []
-  for folder in DEFECT_FOLDERS:
+  for folder in defects:
     sub = test_root / folder
+    if not sub.is_dir():
+      continue
     pool = sorted(p for p in sub.iterdir() if p.suffix.lower() in IMG_EXTS)
     picked.extend(random.sample(pool, min(per_type, len(pool))))
   for src in picked[:n_defect]:
-    shutil.copy2(src, SAMPLE_DEFECT / f"{src.parent.name}_{src.stem}.png")
+    shutil.copy2(src, defect_out / f"{src.parent.name}_{src.stem}.png")
 
-  print(f"Demo samples: {len(list(SAMPLE_GOOD.glob('*')))} good, {len(list(SAMPLE_DEFECT.glob('*')))} defective")
+  print(f"  samples/{category}: {len(list(good_out.glob('*')))} good, {len(list(defect_out.glob('*')))} defective")
+
+
+def _save_metrics_table(all_metrics: dict[str, dict]) -> None:
+  out = MODEL_DIR / "metrics_summary.json"
+  out.write_text(json.dumps(all_metrics, indent=2), encoding="utf-8")
+  print(f"\nMetrics summary → {out}")
 
 
 def main() -> None:
   parser = argparse.ArgumentParser()
+  parser.add_argument(
+      "--category",
+      default="all",
+      help="bottle | capsule | all (default: all)",
+  )
   parser.add_argument("--extract-only", action="store_true")
+  parser.add_argument("--skip-train", action="store_true", help="Only extract + samples")
   args = parser.parse_args()
 
-  _extract_bottle_tar()
+  if args.category == "all":
+    categories = list(DEFAULT_CATEGORIES)
+  else:
+    categories = [args.category]
+
+  for cat in categories:
+    _extract_category_tar(cat)
+
   if args.extract_only:
     print("Extract done.")
     return
 
-  _train_patchcore()
-  _copy_samples()
+  all_metrics: dict[str, dict] = {}
+  if not args.skip_train:
+    for cat in categories:
+      m = _train_category(cat)
+      all_metrics[cat] = {
+          "image_auroc": round(float(m["image_auroc"]), 4),
+          "pixel_auroc": round(float(m.get("pixel_auroc", 0)), 4),
+          "num_test": int(m["num_test"]),
+      }
+
+  for cat in categories:
+    _copy_samples(cat, n_good=3, n_defect=3)
+
+  if all_metrics:
+    _save_metrics_table(all_metrics)
+
   print("\nDone. Run: streamlit run streamlit_app.py")
 
 

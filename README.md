@@ -21,22 +21,26 @@ flowchart LR
   C --> E
 ```
 
-### Sample output (real MVTec-AD bottle)
+### Sample output (real MVTec-AD)
 
-| Normal (OK) | Defect (heatmap + ground truth) |
-|:-----------:|:-------------------------------:|
-| ![normal](docs/samples/normal_example.png) | ![defect](docs/samples/defect_example.png) |
+| Category | Normal (OK) | Defect (heatmap) |
+|:--------:|:-----------:|:------------------:|
+| Bottle | ![normal](docs/samples/normal_example.png) | ![defect](docs/samples/defect_example.png) |
+| Capsule | ![capsule ok](docs/samples/capsule_normal_example.png) | ![capsule defect](docs/samples/capsule_defect_example.png) |
 
 ---
 
-## Results (MVTec-AD bottle — real dataset)
+## Results (MVTec-AD — real dataset, PatchCore)
 
-| Model | Image AUROC | Pixel AUROC | Test images |
-|-------|-------------|-------------|-------------|
-| **PatchCore** | **0.998** | **0.976** | 83 |
-| PaDiM | 0.992 | 0.961 | 83 |
+| Category | Image AUROC | Pixel AUROC | Train (good) | Test images |
+|----------|-------------|-------------|----------------|-------------|
+| **Bottle** | **0.998** | **0.976** | 209 | 83 |
+| **Capsule** | **0.962** | **0.983** | 219 | 132 |
+| PaDiM (bottle) | 0.992 | 0.961 | 209 | 83 |
 
-> Trained on 209 defect-free bottle images. Evaluated on 83 test images (20 good + 63 defective across broken_large, broken_small, contamination).
+> **Bottle:** 83 test images (20 good + 63 defective: broken_large, broken_small, contamination).  
+> **Capsule:** 132 test images (23 good + 109 defective: crack, faulty_imprint, poke, scratch, squeeze).  
+> Same pipeline (`train.py --category …`) — category-agnostic PatchCore + calibrated k-NN threshold.
 
 ---
 
@@ -51,7 +55,7 @@ pip install -r requirements.txt
 
 ### Option A — Streamlit demo (recommended)
 
-Pre-trained weights and 12 real sample images are bundled. Just run:
+Pre-trained weights and demo samples (bottle + capsule) are bundled. Just run:
 
 ```bash
 pip install -r requirements.txt
@@ -64,7 +68,7 @@ Open **http://localhost:8501** — pick a sample, click **Run**, see the heatmap
 
 > Streamlit Cloud: set **Python 3.11**, main file `streamlit_app.py`. If the link fails, open [Manage app](https://share.streamlit.io) → check status is **Running** (not Failed), then **Reboot**.
 
-> To retrain from scratch, place [MVTec bottle archive](https://www.mvtec.com/company/research/datasets/mvtec-ad/downloads) at `data/bottle.tar.xz` and run `python train.py`.
+> To retrain, place MVTec archives at `data/bottle.tar.xz`, `data/capsule.tar.xz` and run `python train.py` (all categories) or `python train.py --category capsule`.
 
 ### Option B — Full pipeline
 
@@ -116,11 +120,13 @@ VisionAnomaly/
 │   ├── gradio_demo.py             # Gradio interactive demo
 │   └── fastapi_server.py          # REST API for inference
 ├── model/                         # trained weights (auto-generated)
-│   ├── patchcore_weights.bin      # PatchCore memory bank + threshold
-│   └── score_threshold.txt        # calibrated normal/defect threshold
-├── sample_images/                 # bundled demo images (real MVTec bottle)
-│   ├── good/                      # 6 normal test bottles
-│   └── defective/                 # 6 defects (broken_large, broken_small, contamination)
+│   ├── patchcore_bottle_weights.bin
+│   ├── patchcore_capsule_weights.bin
+│   ├── patchcore_weights.bin      # legacy alias (bottle)
+│   └── score_threshold_*.txt      # calibrated k-NN thresholds per category
+├── sample_images/                 # bundled demo images per category
+│   ├── bottle/good|defective/
+│   └── capsule/good|defective/
 ├── docs/samples/                  # README sample output images
 ├── tests/test_metrics.py
 ├── Dockerfile

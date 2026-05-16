@@ -1,0 +1,12 @@
+{
+  "bottle": {
+    "image_auroc": 0.998,
+    "pixel_auroc": 0.976,
+    "num_test": 83
+  },
+  "capsule": {
+    "image_auroc": 0.9621,
+    "pixel_auroc": 0.9832,
+    "num_test": 132
+  }
+}

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-VisionAnomaly — Streamlit demo (MVTec-AD bottle / PatchCore).
+VisionAnomaly — Streamlit demo (MVTec-AD bottle & capsule / PatchCore).
 
-Uses existing visionanomaly.models.PatchCore and viz helpers — no changes to src/.
-Load weights from model/patchcore_weights.bin (created by train.py).
+Uses existing visionanomaly.models.PatchCore — no changes to src/.
+Weights: model/patchcore_{category}_weights.bin (from train.py).
 
 Note: root app.py is the existing Hugging Face Gradio entry and is not modified.
 """
@@ -28,20 +28,13 @@ os.environ.setdefault("TORCH_HOME", str(ROOT / ".cache" / "torch"))
 if Path("/mount/src").is_dir():
   os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
+SUPPORTED_CATEGORIES = ("bottle", "capsule")
+CATEGORY_LABELS = {
+    "bottle": "MVTec-AD Bottle",
+    "capsule": "MVTec-AD Capsule",
+}
 
-def _on_streamlit_cloud() -> bool:
-  """Streamlit Community Cloud mounts repo at /mount/src."""
-  return Path("/mount/src").is_dir()
-
-from visionanomaly.config import resolve_device  # noqa: E402
-from visionanomaly.models.patchcore import PatchCore  # noqa: E402
-from visionanomaly.viz.heatmap import normalize_map, overlay_heatmap  # noqa: E402
-
-WEIGHTS = ROOT / "model" / "patchcore_weights.bin"
 CONFIG = ROOT / "configs" / "default.yaml"
-SAMPLE_GOOD = ROOT / "sample_images" / "good"
-SAMPLE_DEFECT = ROOT / "sample_images" / "defective"
-THRESHOLD_FILE = ROOT / "model" / "score_threshold.txt"
 THUMB_W = 64
 
 _transform = T.Compose(
@@ -68,18 +61,60 @@ _COMPACT_CSS = """
 """
 
 
+def _on_streamlit_cloud() -> bool:
+  return Path("/mount/src").is_dir()
+
+
+from visionanomaly.config import resolve_device  # noqa: E402
+from visionanomaly.models.patchcore import PatchCore  # noqa: E402
+from visionanomaly.viz.heatmap import normalize_map, overlay_heatmap  # noqa: E402
+
+
+def _weights_path(category: str) -> Path:
+  p = ROOT / "model" / f"patchcore_{category}_weights.bin"
+  if p.is_file():
+    return p
+  if category == "bottle":
+    legacy = ROOT / "model" / "patchcore_weights.bin"
+    if legacy.is_file():
+      return legacy
+  return p
+
+
+def _threshold_path(category: str) -> Path:
+  p = ROOT / "model" / f"score_threshold_{category}.txt"
+  if p.is_file():
+    return p
+  if category == "bottle":
+    legacy = ROOT / "model" / "score_threshold.txt"
+    if legacy.is_file():
+      return legacy
+  return p
+
+
+def _sample_dir(category: str, split: str) -> Path:
+  nested = ROOT / "sample_images" / category / split
+  if nested.is_dir() and any(nested.iterdir()):
+    return nested
+  # Legacy flat layout (bottle only)
+  if category == "bottle":
+    return ROOT / "sample_images" / split
+  return nested
+
+
 def _load_cfg() -> dict:
   with open(CONFIG, encoding="utf-8") as f:
     return yaml.safe_load(f)
 
 
 @st.cache_resource
-def _load_model(_weights_version: float) -> tuple[PatchCore, float]:
-  """Load PatchCore memory bank from model/patchcore_weights.bin."""
-  if not WEIGHTS.is_file():
-    raise FileNotFoundError(f"Missing {WEIGHTS}. Run: python train.py")
+def _load_model(category: str, _weights_version: float) -> tuple[PatchCore, float]:
+  weights = _weights_path(category)
+  if not weights.is_file():
+    raise FileNotFoundError(
+        f"Missing {weights}. Run: python train.py --category {category}"
+    )
   cfg = _load_cfg()
-  # Cloud free tier: CPU only (no CUDA/MPS)
   device = "cpu" if _on_streamlit_cloud() else resolve_device(cfg.get("device", "auto"))
   detector = PatchCore(
       backbone=cfg["model"]["backbone"],
@@ -88,16 +123,16 @@ def _load_model(_weights_version: float) -> tuple[PatchCore, float]:
       num_neighbors=cfg["model"]["num_neighbors"],
       device=device,
   )
-  state = torch.load(WEIGHTS, map_location="cpu", weights_only=False)
+  state = torch.load(weights, map_location="cpu", weights_only=False)
   detector.memory_bank = state["memory_bank"].to(device)
   detector.coreset_ratio = state["coreset_ratio"]
   detector.num_neighbors = state["num_neighbors"]
   detector._rp = state.get("rp")
   threshold = float(state.get("score_threshold", 0.0))
-  if threshold <= 0 and THRESHOLD_FILE.is_file():
-    threshold = float(THRESHOLD_FILE.read_text().strip())
+  if threshold <= 0 and _threshold_path(category).is_file():
+    threshold = float(_threshold_path(category).read_text().strip())
   if threshold <= 0:
-    threshold = 4.09  # fallback for real MVTec bottle k-NN scores
+    threshold = 4.09 if category == "bottle" else 5.5
   return detector, threshold
 
 
@@ -109,7 +144,6 @@ def _list_samples(folder: Path) -> list[Path]:
 
 
 def _sample_list_row(path: Path, key: str) -> None:
-  """Compact row: small thumbnail, filename, Run button."""
   c_img, c_name, c_btn = st.columns([1, 5, 1], gap="small")
   with c_img:
     st.image(str(path), width=THUMB_W)
@@ -124,7 +158,6 @@ def _sample_list_row(path: Path, key: str) -> None:
 def _run_inference(
     detector: PatchCore, pil: Image.Image, threshold: float
 ) -> tuple[float, str, np.ndarray, np.ndarray, np.ndarray]:
-  """Return score, label, RGB, jet heatmap, overlay (all uint8 RGB)."""
   tensor = _transform(pil.convert("RGB"))
   score, smap = detector.predict(tensor)
   label = "DEFECT" if score > threshold else "OK"
@@ -142,6 +175,7 @@ def _show_result(
     heat: np.ndarray,
     overlay: np.ndarray,
     threshold: float,
+    category: str,
 ) -> None:
   c1, c2, c3 = st.columns(3)
   c1.image(rgb, caption="Original", use_container_width=True)
@@ -151,13 +185,16 @@ def _show_result(
   st.metric(
       "Anomaly score",
       f"{score:.4f}",
-      help="PatchCore k-NN distance (higher = more anomalous; threshold calibrated on normal bottles)",
+      help=f"PatchCore k-NN distance ({category}; higher = more anomalous)",
   )
   if label == "OK":
     st.success("✅ NORMAL")
   else:
     st.error("🚨 DEFECT DETECTED")
-  st.caption(f"Threshold: {threshold:.3f} (calibrated on normal bottles). Score above → defect.")
+  st.caption(
+      f"Threshold: {threshold:.3f} (calibrated on normal {category} test images). "
+      "Score above → defect."
+  )
 
 
 def main() -> None:
@@ -166,43 +203,64 @@ def main() -> None:
 
   if "selected_path" not in st.session_state:
     st.session_state.selected_path = None
+  if "category" not in st.session_state:
+    st.session_state.category = "bottle"
 
   left, right = st.columns([1, 2])
 
   with left:
     st.title("VisionAnomaly")
     st.subheader("Industrial Defect Detection")
-    st.markdown("**Trained on MVTec-AD Bottle (PatchCore)**")
+
+    available = [c for c in SUPPORTED_CATEGORIES if _weights_path(c).is_file()]
+    if not available:
+      available = list(SUPPORTED_CATEGORIES)
+
+    category = st.selectbox(
+        "Product category",
+        options=available,
+        index=available.index(st.session_state.category)
+        if st.session_state.category in available
+        else 0,
+        format_func=lambda c: CATEGORY_LABELS.get(c, c),
+    )
+    if category != st.session_state.category:
+      st.session_state.category = category
+      st.session_state.selected_path = None
+
+    st.markdown(f"**Trained on {CATEGORY_LABELS.get(category, category)} (PatchCore)**")
     st.warning(
-        "⚠️ Model trained on real MVTec-AD bottle images. "
+        f"⚠️ Model trained on real MVTec-AD **{category}** images. "
         "Pick a sample below — only bundled demo images are supported."
     )
 
     st.markdown("#### Samples")
-    good_files = _list_samples(SAMPLE_GOOD)
-    defect_files = _list_samples(SAMPLE_DEFECT)
+    good_files = _list_samples(_sample_dir(category, "good"))
+    defect_files = _list_samples(_sample_dir(category, "defective"))
 
     if not good_files and not defect_files:
-      st.info("No samples found. Run `python train.py` first.")
+      st.info(f"No {category} samples. Run: python train.py --category {category}")
     else:
       if good_files:
         st.markdown("**Normal**")
         for p in good_files:
-          _sample_list_row(p, key=f"g_{p.name}")
+          _sample_list_row(p, key=f"{category}_g_{p.name}")
 
       if defect_files:
         st.markdown("**Defective**")
         for p in defect_files:
-          _sample_list_row(p, key=f"d_{p.name}")
+          _sample_list_row(p, key=f"{category}_d_{p.name}")
 
       if st.session_state.selected_path is None and good_files:
         st.session_state.selected_path = str(good_files[0])
 
   with right:
     st.subheader("Results")
+    category = st.session_state.category
     try:
-      weights_ver = WEIGHTS.stat().st_mtime if WEIGHTS.is_file() else 0.0
-      detector, threshold = _load_model(weights_ver)
+      wpath = _weights_path(category)
+      weights_ver = wpath.stat().st_mtime if wpath.is_file() else 0.0
+      detector, threshold = _load_model(category, weights_ver)
     except FileNotFoundError as e:
       st.error(str(e))
       st.stop()
@@ -221,10 +279,10 @@ def main() -> None:
       st.error("Could not open selected image.")
       st.stop()
 
-    st.caption(f"**{Path(sel).name}**")
+    st.caption(f"**{Path(sel).name}** ({category})")
     with st.spinner("Running PatchCore…"):
       score, label, rgb, heat, overlay = _run_inference(detector, pil, threshold)
-    _show_result(score, label, rgb, heat, overlay, threshold)
+    _show_result(score, label, rgb, heat, overlay, threshold, category)
 
 
 if __name__ == "__main__":
