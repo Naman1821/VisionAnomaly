@@ -54,10 +54,13 @@ pip install -r requirements.txt
 Pre-trained weights and 12 real sample images are bundled. Just run:
 
 ```bash
+pip install -r requirements.txt
 streamlit run streamlit_app.py
 ```
 
 Open **http://localhost:8501** — pick a sample, click **Run**, see the heatmap.
+
+**Live demo:** [visionanomaly.streamlit.app](https://visionanomaly.streamlit.app) (requires Python 3.11 on Streamlit Cloud)
 
 > To retrain from scratch, place [MVTec bottle archive](https://www.mvtec.com/company/research/datasets/mvtec-ad/downloads) at `data/bottle.tar.xz` and run `python train.py`.
 

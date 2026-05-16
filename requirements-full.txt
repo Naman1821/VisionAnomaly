@@ -1,0 +1,5 @@
+# Full install: local dev, scripts, Gradio, Hugging Face Spaces (app.py)
+-r requirements.txt
+pandas>=2.0.0
+gradio>=4.44.0,<5
+pyaudioop>=0.3.0; python_version >= "3.13" and python_version < "3.14"
